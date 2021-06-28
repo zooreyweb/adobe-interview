@@ -1,0 +1,4 @@
+Step 1: Create New ECR Reposity
+Step 2: Copy the Image Name and create a AWS Batch '462435663755.dkr.ecr.us-east-1.amazonaws.com/hit-data-dev'
+Step 3: Create New Compute Environment in AWS Batch. For simplicity, I created On-demand env
+Step 4: Create New Job Queues based on this compute env

@@ -1,0 +1,15 @@
+job_info:
+  JOB_NAME: 'ADOBE-ANALYTICS-HIT-DATA-JOB'
+  JOB_TYPE: 'SEMATIC'
+  BUSINESS_FUNCTION: 'AEP-ANALYTICS'
+
+s3:
+  INPUT_DATA_PATH: 'inputs/hit_data'
+  OUTPUT_DATA_PATH: 'output/hit_data'
+  PROCESSING_DATA_PATH: 'processing/hit_data'
+  OUTPUT_DATA_FILE: 'SearchKeywordPerformance.tab'
+
+
+  archive:
+    INPUT_ARCHIVE_PATH: 'archive/inputs/hit_data'
+    OUTPUT_ARCHIVE_PATH: 'archive/output/hit_data'

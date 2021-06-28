@@ -1,0 +1,14 @@
+Step 1: Create New ECR Reposity
+Step 2: Copy the Image Name and create a AWS Batch '462435663755.dkr.ecr.us-east-1.amazonaws.com/hit-data-dev'
+Step 3: Create New Compute Environment in AWS Batch. For simplicity, I created On-demand env
+Step 4: Create New Job Queues based on this compute env
+
+Create Docker Image and deploy to AWS
+
+Step 1: Build Docker image by executing this command from Terminal
+		docker build -t <image_name> .
+Step 2: Login to AWS ECR via terminal 
+		aws ecr get-login-password --region us-east-1 --no-verify-ssl
+Step 3: docker login --username AWS --password <image_name>
+Step 3: Push the image by executing this command
+		docker push <image name>
