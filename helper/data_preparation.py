@@ -28,7 +28,7 @@ class ModelDataPreparation:
         self.config = config
         print(self.config)
         self.fs = s3fs.S3FileSystem(default_cache_type='none',
-                                    use_listings_cache=False)  # This exposes a filesystem-like API (ls, cp, open, etc.) on top of S3 storage.
+                                    use_listings_cache=False)
         self.data_bucket = os.environ["DATA_BUCKET"]
         print(f"Bucket Name: {self.data_bucket}")
         self.s3 = boto3.client('s3')
@@ -155,17 +155,17 @@ class ModelDataPreparation:
 
     def write_dataframe(self, result_df):
         """
+        This function will write a pandas datafram into S3 bucket as a tab delimited file
         :param result_df: dataframe
         :return Status: int
         """
-        print("inside write")
         #Archieve the last run files
+        #Currently not implemented but can be easily achieved by calling copy_s3_data function
 
         today = datetime.now().strftime('%Y-%m-%d')
         export_data_path = f"{self.config['s3']['OUTPUT_DATA_PATH']}/{today}_{self.config['s3']['OUTPUT_DATA_FILE']}"
-        print(export_data_path)
         with io.StringIO() as csv_buffer:
-            result_df.to_csv(csv_buffer, index=False)
+            result_df.to_csv(csv_buffer, index=False, sep='\t')
             response = self.s3.put_object(
                 Bucket=self.data_bucket, Key=export_data_path, Body=csv_buffer.getvalue())
 
@@ -175,6 +175,7 @@ class ModelDataPreparation:
             print(f"Successful S3 put_object response. Status - {status}")
         else:
             print(f"Unsuccessful S3 put_object response. Status - {status}")
+            exit(1)
 
     def get_referrer_data(self, referrer):
         """
@@ -211,32 +212,32 @@ class ModelDataPreparation:
         }
         hit_enriched_data_df.rename(col_rename_d, axis=1, inplace=True)
 
-    def apply_business_logic(self, datapre_df):
+    def apply_business_logic(self, dataPrep_df):
+
         """
-        This function will create simulate revenue by forward fill and get the required output
+        This function will create simulate revenue by forward fill the revenue by ipaddress and generated the required business output
         :param datapre_df:
         :return results_df: dataframe
         """
 
-        datapre_df['Revenue_Simulated'] = datapre_df.groupby(['ip']).tot_revenue.ffill()
+        dataPrep_df['Revenue_Simulated'] = dataPrep_df.groupby(['ip']).tot_revenue.ffill()
         #Filter to get external website only
-        result_df = datapre_df[datapre_df['search_domain'] != 'esshopzilla.com']
+        result_df = dataPrep_df[dataPrep_df['search_domain'] != 'esshopzilla.com']
         result_df = result_df.loc[result_df.groupby(["ip", "Revenue_Simulated"])["partition_key"].idxmin()]
 
         #Drop all unnessary columns
         result_df = result_df.drop(['hit_time_gmt', 'date_time', 'ip', 'event_list', 'partition_key', 'tot_revenue'], axis=1) \
             .sort_values(by='Revenue_Simulated', ascending=False).reset_index(drop=True)
 
-        print(result_df.shape[0])
 
         result_df = result_df.groupby(['search_domain', 'search_term'], as_index = False)['Revenue_Simulated'].agg('sum')
 
-        print(result_df.shape[0])
         col_rename_d = {
             'search_domain': 'Search Engine Domain',
             'search_term': 'Search Keyword',
             'Revenue_Simulated': 'Revenue'
         }
-        result_df = result_df.rename(col_rename_d, axis=1, inplace=True)
+        result_df.rename(col_rename_d, axis=1, inplace=True)
         print(result_df.shape[0])
+
         return result_df

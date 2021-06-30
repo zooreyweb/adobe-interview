@@ -32,7 +32,7 @@ def main():
 
 	"""
 
-	##Reac Config yaml
+	##Read Config yaml
 	with open('config.yml', 'r') as f:
 		config = yaml.safe_load(f)
 		f.close
@@ -44,13 +44,13 @@ def main():
 	## Read data into Pandas dataframe
 	input_df = dataPrep.get_hitdata_set()
 
-	#Datapreparation
+	#Data preparation
 	dataPrep_df = dataPrep.preprocess_data(input_df)
 
 	#Apply business logic
 	result_df = dataPrep.apply_business_logic(dataPrep_df)
 
-	#Read into S3 bucket
+	#Write into S3 bucket
 	status = dataPrep.write_dataframe(result_df)
 	print("Completed")
 
