@@ -31,8 +31,6 @@ def main():
 	6. Exit
 
 	"""
-	print("Welcome to Raj world")
-
 
 	##Reac Config yaml
 	with open('config.yml', 'r') as f:
@@ -43,23 +41,17 @@ def main():
 	##Instantiate class objects
 	dataPrep = ModelDataPreparation(config)
 
-	## Data Preparation
-
+	## Read data into Pandas dataframe
 	input_df = dataPrep.get_hitdata_set()
-	input_df.head(5)
-	bucket = 'adobe-hitdata'
-	input_df['page_domain'] = input_df['page_url'].apply(lambda x: urlparse(x).netloc)
 
-	input_df['search_domain'],input_df['search_query'], input_df['search_term'] =\
-		zip(*input_df['referrer'].map(dataPrep.get_referrer_data))
+	#Datapreparation
+	dataPrep_df = dataPrep.preprocess_data(input_df)
 
-	df_product_list_explode = input_df.assign(product_list=input_df['product_list'].str.split(',')).explode('product_list')
-	df_product_list = df_product_list_explode['product_list'].str.split(';', expand=True)
-	hit_enriched_data_df = pd.concat([df_product_list_explode, df_product_list], axis=1)
-	dataPrep.cols_rename_format(hit_enriched_data_df)
-	hit_enriched_data_df['partition_key'] = hit_enriched_data_df.groupby('ip')['hit_time_gmt'].rank(method='first', ascending=False)
-	hit_enriched_data_df.sort_values(by=['ip', 'partition_key'], ascending=True).reset_index()
-	status = dataPrep.write_dataframe(hit_enriched_data_df)
+	#Apply business logic
+	result_df = dataPrep.apply_business_logic(dataPrep_df)
+
+	#Read into S3 bucket
+	status = dataPrep.write_dataframe(result_df)
 	print("Completed")
 
 if __name__ == '__main__':

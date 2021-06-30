@@ -11,7 +11,7 @@ from datetime import datetime
 import numpy as np
 from urllib.parse import urlparse
 import re
-
+import sys
 
 class ModelDataPreparation:
 
@@ -32,7 +32,7 @@ class ModelDataPreparation:
         self.data_bucket = os.environ["DATA_BUCKET"]
         print(f"Bucket Name: {self.data_bucket}")
         self.s3 = boto3.client('s3')
-        self.today = datetime.now().strftime('%Y-%m-%d')
+        self.today = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         return None
 
     def get_hitdata_set(self):
@@ -46,15 +46,13 @@ class ModelDataPreparation:
             Read the data from S3 bucket and returns pandas DF
         """
         data_ingest_start = time.time()
-        print(data_ingest_start)
-        print('inside hitdataset')
         input_path = os.path.join(self.config['s3']['INPUT_DATA_PATH'], 'hit_data.txt')
         processing_path = os.path.join(self.config['s3']['PROCESSING_DATA_PATH'], self.today, 'hit_data.txt')
         print(input_path, processing_path)
 
         #Copy the files to processing directory
         status = self.copy_s3_data(input_path, processing_path)
-        status =200
+
         if status == 200:
             hit_data_set_bucket = os.path.join('s3://', self.data_bucket, processing_path)
             print(hit_data_set_bucket)
@@ -62,12 +60,8 @@ class ModelDataPreparation:
             print(bucket_keys)
 
         try:
-            print('inside read_csv')
-            bucket_name = 'adobe-hitdata'
-            print(bucket_name)
-            #s3://adobe-hitdata/inputs/hit_data/data_org.txt
 
-            obj = self.s3.get_object(Bucket=bucket_name, Key=processing_path)
+            obj = self.s3.get_object(Bucket=self.data_bucket, Key=processing_path)
             input_data_set = pd.read_csv(io.BytesIO(obj['Body'].read()), sep='\t', engine='python')
             input_data_set.head(3)
             '''
@@ -91,39 +85,87 @@ class ModelDataPreparation:
 
         return input_data_set
 
+    def preprocess_data(self, input_df):
+        """
+        Preprocessing, data cleansing and derive new features
+
+        :param input_df:
+        :return:
+        """
+
+        #Filter ipaddress without Purchase event = 1.0
+        input_df = input_df[input_df.ip.isin(input_df.loc[input_df.event_list == 1.0, 'ip'])]
+
+        #Derive Domain name, search term and query
+        input_df['page_domain'] = input_df['page_url'].apply(lambda x: urlparse(x).netloc)
+
+        input_df['search_domain'], input_df['search_query'], input_df['search_term'] = \
+            zip(*input_df['referrer'].map(self.get_referrer_data))
+
+        #Explode data by product
+        df_product_list_explode = input_df.assign(product_list=input_df['product_list'].str.split(',')).explode('product_list')
+
+        #Split rows to create Product attributes
+        df_product_list = df_product_list_explode['product_list'].str.split(';', expand=True)
+        hit_enriched_data_df = pd.concat([df_product_list_explode, df_product_list], axis=1)
+        self.cols_rename_format(hit_enriched_data_df)
+
+        #Partition data by ip, hit_time and sort data by ip and partition key
+        hit_enriched_data_df['partition_key'] = hit_enriched_data_df.groupby('ip')['hit_time_gmt'].rank(method='first', ascending=False)
+
+        #Drop unwanted columns
+        dataprep_df = hit_enriched_data_df.drop(['pagename','referrer', 'page_domain', 'search_query', 'category', \
+                                                 'custom_event', 'user_agent', 'geo_city', 'geo_region', 'geo_country', 'page_url', 'product_list', \
+                                                 'product_name','num_of_items'], \
+                                                axis=1).sort_values(by=['ip', 'partition_key'], ascending=True).reset_index(drop=True)
+
+        #Fillna for empty records
+        dataprep_df = dataprep_df.replace(r'^\s*$', np.nan, regex=True)
+
+        return dataprep_df
+
     def copy_s3_data(self, input_path, output_path):
         """
-        This function copy and delete a file btw folders within an s3 bucket 
+        This function copy and delete a file btw folders within s3 bucket
         :param input_path: String
         :param output_path: String
         :return: status
         """
-        print('inside s3 copy function')
         s3_resource = boto3.resource('s3')
-        response = s3_resource.Object(self.data_bucket, output_path ).copy_from(CopySource=input_path)
-        print(response)
-        #status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        s3_resource.Object(self.data_bucket, input_path).delete()
-        '''
-        if status == 200:
-            print(f"Successful S3 put_object response. Status - {status}")
-            s3_resource.Object(self.data_bucket, input_path).delete()
-        else:
-            print(f"Unsuccessful S3 put_object response. Status - {status}")
-        '''
+        num_of_file = 0
+
+        for obj in s3_resource.Bucket(self.data_bucket).objects.filter(Prefix=input_path):
+            print("test")
+            print(obj)
+            num_of_file +=1
+            if obj.key[-1] != '/':
+                response = s3_resource.Object(self.data_bucket, output_path ).copy_from(CopySource= os.path.join(self.data_bucket,input_path))
+                status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                print(status)
+                if status == 200:
+                    print(f"Successful S3 put_object response. Status - {status}")
+                    s3_resource.Object(self.data_bucket, input_path).delete()
+                else:
+                    print(f"Unsuccessful S3 put_object response. Status - {status}")
+                    sys.exit(1)
+        if num_of_file == 0:
+            print(f"No files availabe in this bucket: {input_path}")
+            sys.exit(1)
 
 
-    def write_dataframe(self, df):
+    def write_dataframe(self, result_df):
         """
-        :param df:
-        :return:
+        :param result_df: dataframe
+        :return Status: int
         """
         print("inside write")
-        
-        export_data_path = f"{self.config['s3']['OUTPUT_DATA_PATH']}/{self.today}_{self.config['s3']['OUTPUT_DATA_FILE']}"
+        #Archieve the last run files
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        export_data_path = f"{self.config['s3']['OUTPUT_DATA_PATH']}/{today}_{self.config['s3']['OUTPUT_DATA_FILE']}"
         print(export_data_path)
         with io.StringIO() as csv_buffer:
-            df.to_csv(csv_buffer, index=False)
+            result_df.to_csv(csv_buffer, index=False)
             response = self.s3.put_object(
                 Bucket=self.data_bucket, Key=export_data_path, Body=csv_buffer.getvalue())
 
@@ -168,3 +210,33 @@ class ModelDataPreparation:
             5: 'merchandising_evar'
         }
         hit_enriched_data_df.rename(col_rename_d, axis=1, inplace=True)
+
+    def apply_business_logic(self, datapre_df):
+        """
+        This function will create simulate revenue by forward fill and get the required output
+        :param datapre_df:
+        :return results_df: dataframe
+        """
+
+        datapre_df['Revenue_Simulated'] = datapre_df.groupby(['ip']).tot_revenue.ffill()
+        #Filter to get external website only
+        result_df = datapre_df[datapre_df['search_domain'] != 'esshopzilla.com']
+        result_df = result_df.loc[result_df.groupby(["ip", "Revenue_Simulated"])["partition_key"].idxmin()]
+
+        #Drop all unnessary columns
+        result_df = result_df.drop(['hit_time_gmt', 'date_time', 'ip', 'event_list', 'partition_key', 'tot_revenue'], axis=1) \
+            .sort_values(by='Revenue_Simulated', ascending=False).reset_index(drop=True)
+
+        print(result_df.shape[0])
+
+        result_df = result_df.groupby(['search_domain', 'search_term'], as_index = False)['Revenue_Simulated'].agg('sum')
+
+        print(result_df.shape[0])
+        col_rename_d = {
+            'search_domain': 'Search Engine Domain',
+            'search_term': 'Search Keyword',
+            'Revenue_Simulated': 'Revenue'
+        }
+        result_df = result_df.rename(col_rename_d, axis=1, inplace=True)
+        print(result_df.shape[0])
+        return result_df
